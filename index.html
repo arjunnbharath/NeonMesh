@@ -9,7 +9,10 @@
 body { background: #000; overflow: hidden; width: 100vw; height: 100vh; }
 #container { position: relative; width: 100vw; height: 100vh; }
 video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+canvas {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+}
 #status {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
   color: rgba(255,255,255,0.7); font-family: sans-serif; font-size: 16px;
@@ -21,6 +24,41 @@ canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
   color: rgba(255,255,255,0.25); font-family: sans-serif; font-size: 12px;
   pointer-events: none; letter-spacing: 0.08em;
 }
+
+/* HUD top left */
+#hud {
+  position: absolute; top: 18px; left: 18px;
+  font-family: 'Courier New', monospace;
+  font-size: 11px; color: rgba(180,255,200,0.7);
+  pointer-events: none; z-index: 5;
+  line-height: 1.7; letter-spacing: 0.06em;
+}
+#hud .hud-title { color: rgba(255,255,255,0.5); font-size: 10px; margin-bottom: 2px; letter-spacing: 0.15em; }
+#hud .hud-divider { color: rgba(255,255,255,0.15); margin-bottom: 4px; }
+#hud .hud-row { display: flex; gap: 6px; }
+#hud .hud-label { color: rgba(255,255,255,0.3); min-width: 72px; }
+#hud .hud-value { color: rgba(180,255,200,0.85); }
+#hud .hud-value.active { color: rgba(120,220,255,0.95); text-shadow: 0 0 8px rgba(100,200,255,0.6); }
+
+/* loading screen */
+#loadScreen {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: #000; z-index: 100;
+  font-family: 'Courier New', monospace;
+  color: #c8c8c8; font-size: 13px;
+  padding: 32px 36px;
+  display: flex; flex-direction: column; justify-content: flex-start;
+  opacity: 0;
+  animation: fadeIn 0.8s ease forwards;
+}
+@keyframes fadeIn { to { opacity: 1; } }
+#loadScreen .section-title { color: #fff; font-size: 14px; letter-spacing: 0.15em; margin-bottom: 4px; }
+#loadScreen .divider { color: #444; margin-bottom: 10px; }
+#loadScreen .line { margin-bottom: 3px; min-height: 18px; }
+#loadScreen .label { color: #888; }
+#loadScreen .value { color: #c8c8c8; }
+#progressWrap { width: 180px; height: 6px; background: #222; margin: 8px 0 18px 0; border-radius: 2px; overflow: hidden; }
+#progressBar { height: 100%; width: 0%; background: #fff; border-radius: 2px; transition: width 0.05s linear; }
 </style>
 </head>
 <body>
@@ -29,15 +67,150 @@ canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
   <canvas id="canvas"></canvas>
   <div id="status">loading hand tracking...</div>
   <div id="hint">point fingers to create strings</div>
+
+  <!-- HUD -->
+  <div id="hud">
+    <div class="hud-title">SYS MONITOR</div>
+    <div class="hud-divider">────────────────</div>
+    <div class="hud-row"><span class="hud-label">HANDS :</span><span class="hud-value" id="hud-hands">0</span></div>
+    <div class="hud-row"><span class="hud-label">FINGERS :</span><span class="hud-value" id="hud-fingers">0</span></div>
+    <div class="hud-row"><span class="hud-label">STRINGS :</span><span class="hud-value" id="hud-strings">0</span></div>
+    <div class="hud-row"><span class="hud-label">NODES :</span><span class="hud-value" id="hud-nodes">0</span></div>
+    <div class="hud-divider" style="margin-top:4px">────────────────</div>
+    <div class="hud-row"><span class="hud-label">POS X :</span><span class="hud-value" id="hud-x">--</span></div>
+    <div class="hud-row"><span class="hud-label">POS Y :</span><span class="hud-value" id="hud-y">--</span></div>
+    <div class="hud-row"><span class="hud-label">VELOCITY :</span><span class="hud-value" id="hud-vel">--</span></div>
+    <div class="hud-row"><span class="hud-label">SPREAD :</span><span class="hud-value" id="hud-spread">--</span></div>
+    <div class="hud-divider" style="margin-top:4px">────────────────</div>
+    <div class="hud-row"><span class="hud-label">FRAME :</span><span class="hud-value" id="hud-frame">0</span></div>
+    <div class="hud-row"><span class="hud-label">STATUS :</span><span class="hud-value" id="hud-status">IDLE</span></div>
+  </div>
+</div>
+
+<!-- loading screen -->
+<div id="loadScreen">
+  <div id="typeOutput"></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 
 <script>
-const video = document.getElementById('video');
+// ── typewriter loading screen ──────────────────────────────────────────────
+const loadScreen = document.getElementById('loadScreen');
+const typeOutput = document.getElementById('typeOutput');
+
+const LINES = [
+  { type: 'title',   text: 'LOADING' },
+  { type: 'divider', text: '--------------------------------' },
+  { type: 'plain',   text: 'Initializing environment...' },
+  { type: 'plain',   text: 'Loading WebGL context...' },
+  { type: 'plain',   text: 'Setting up hand input system...' },
+  { type: 'plain',   text: 'Calibrating gesture engine...' },
+  { type: 'plain',   text: '> Just a moment...' },
+  { type: 'progress' },
+  { type: 'blank' },
+  { type: 'title',   text: 'SYSTEM' },
+  { type: 'divider', text: '--------------------------------' },
+  { type: 'kv', label: 'MODE  : ', value: 'Neon Strings' },
+  { type: 'kv', label: 'INPUT : ', value: 'Hand Tracking / MediaPipe' },
+  { type: 'kv', label: 'RENDER: ', value: 'Canvas 2D / WebGL' },
+  { type: 'kv', label: 'HANDS : ', value: 'Up to 2' },
+  { type: 'kv', label: 'BUILD : ', value: 'v1.0.0' },
+  { type: 'blank' },
+  { type: 'plain', text: 'Transitioning to scene...' },
+  { type: 'plain', text: '_' },
+];
+
+let lineIdx = 0, charIdx = 0, currentLineEl = null;
+
+function createLineEl(cls) {
+  const d = document.createElement('div');
+  d.className = 'line';
+  if (cls) d.classList.add(cls);
+  typeOutput.appendChild(d);
+  return d;
+}
+
+function typeNextChar() {
+  if (lineIdx >= LINES.length) { setTimeout(transitionToMain, 300); return; }
+  const line = LINES[lineIdx];
+
+  if (line.type === 'blank') {
+    createLineEl(); lineIdx++; charIdx = 0;
+    setTimeout(typeNextChar, 10); return;
+  }
+  if (line.type === 'progress') {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `<div style="color:#888;margin-bottom:4px">Assets : <span id="assetCount">0</span> / 20</div>
+      <div id="progressWrap"><div id="progressBar"></div></div>`;
+    typeOutput.appendChild(wrap);
+    lineIdx++; charIdx = 0;
+    let pv = 0;
+    const pi = setInterval(() => {
+      pv += Math.random() * 25 + 15;
+      if (pv >= 100) { pv = 100; clearInterval(pi); setTimeout(typeNextChar, 100); }
+      document.getElementById('progressBar').style.width = pv + '%';
+      document.getElementById('assetCount').textContent = Math.round(pv * 0.2);
+    }, 30);
+    return;
+  }
+
+  if (charIdx === 0) {
+    if (line.type === 'title')        currentLineEl = createLineEl('section-title');
+    else if (line.type === 'divider') currentLineEl = createLineEl('divider');
+    else                              currentLineEl = createLineEl();
+  }
+
+  const fullText = line.type === 'kv' ? line.label + line.value : line.text;
+
+  if (charIdx < fullText.length) {
+    if (line.type === 'kv') {
+      const ll = line.label.length;
+      if (charIdx < ll)
+        currentLineEl.innerHTML = `<span class="label">${fullText.slice(0,charIdx+1)}</span>▋`;
+      else
+        currentLineEl.innerHTML = `<span class="label">${line.label}</span><span class="value">${fullText.slice(ll,charIdx+1)}</span>▋`;
+    } else {
+      currentLineEl.innerHTML = fullText.slice(0, charIdx+1) + '▋';
+    }
+    charIdx++;
+    const delay = line.type === 'divider' ? 4 : (line.type === 'title' ? 10 : 5 + Math.random()*7);
+    setTimeout(typeNextChar, delay);
+  } else {
+    if (line.type === 'kv')
+      currentLineEl.innerHTML = `<span class="label">${line.label}</span><span class="value">${line.value}</span>`;
+    else
+      currentLineEl.textContent = fullText;
+    lineIdx++; charIdx = 0;
+    setTimeout(typeNextChar, line.type === 'title' ? 20 : 8);
+  }
+}
+
+function transitionToMain() {
+  loadScreen.style.transition = 'opacity 0.6s ease';
+  loadScreen.style.opacity = '0';
+  setTimeout(() => { loadScreen.style.display = 'none'; }, 600);
+}
+
+setTimeout(() => { typeNextChar(); }, 200);
+
+// ── HUD elements ───────────────────────────────────────────────────────────
+const hudHands   = document.getElementById('hud-hands');
+const hudFingers = document.getElementById('hud-fingers');
+const hudStrings = document.getElementById('hud-strings');
+const hudNodes   = document.getElementById('hud-nodes');
+const hudX       = document.getElementById('hud-x');
+const hudY       = document.getElementById('hud-y');
+const hudVel     = document.getElementById('hud-vel');
+const hudSpread  = document.getElementById('hud-spread');
+const hudFrame   = document.getElementById('hud-frame');
+const hudStatus  = document.getElementById('hud-status');
+
+// ── main hand tracking ─────────────────────────────────────────────────────
+const video  = document.getElementById('video');
 const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
+const ctx    = canvas.getContext('2d');
 const status = document.getElementById('status');
 
 function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
@@ -73,68 +246,104 @@ function getOrCreate(key, h) {
   return stringState[key];
 }
 
-let t = 0;
+let t = 0, frameCount = 0;
+let prevCentroid = null;
 
 function drawBand(x1, y1, x2, y2, state) {
-  const dist = Math.hypot(x2 - x1, y2 - y1) || 1;
+  const dist = Math.hypot(x2-x1, y2-y1) || 1;
   const delta = dist - state.prevDist;
-  if (Math.abs(delta) > 1.5) state.vib = Math.min(Math.abs(delta) * 0.45, 12);
+  if (Math.abs(delta) > 1.5) state.vib = Math.min(Math.abs(delta)*0.45, 12);
   state.prevDist = dist;
   state.vib *= 0.84;
   state.hue = (state.hue + state.hueSpeed) % 360;
 
-  const h = state.hue, h2 = (state.hue + 60) % 360, h3 = (state.hue + 120) % 360;
-  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
-  const nx = -(y2 - y1) / dist, ny = (x2 - x1) / dist;
-  const cx = mx + nx * state.vib * Math.sin(t * 20);
-  const cy = my + ny * state.vib * Math.sin(t * 20);
+  const h=state.hue, h2=(state.hue+60)%360, h3=(state.hue+120)%360;
+  const mx=(x1+x2)/2, my=(y1+y2)/2;
+  const nx=-(y2-y1)/dist, ny=(x2-x1)/dist;
+  const cx=mx+nx*state.vib*Math.sin(t*20);
+  const cy=my+ny*state.vib*Math.sin(t*20);
 
-  // outer glow layers for the line
-  [18, 10, 5].forEach((lw, i) => {
-    const alpha = [0.04, 0.07, 0.12][i];
-    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.quadraticCurveTo(cx, cy, x2, y2);
-    ctx.strokeStyle = `hsla(${h2},100%,70%,${alpha})`;
-    ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.stroke();
+  [18,10,5].forEach((lw,i) => {
+    const alpha=[0.04,0.07,0.12][i];
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.quadraticCurveTo(cx,cy,x2,y2);
+    ctx.strokeStyle=`hsla(${h2},100%,70%,${alpha})`;
+    ctx.lineWidth=lw; ctx.lineCap='round'; ctx.stroke();
   });
 
-  // core bright line with gradient
-  const g = ctx.createLinearGradient(x1, y1, x2, y2);
-  g.addColorStop(0,   `hsl(${h},100%,75%)`);
-  g.addColorStop(0.5, `hsl(${h2},100%,95%)`);
-  g.addColorStop(1,   `hsl(${h3},100%,75%)`);
-  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.quadraticCurveTo(cx, cy, x2, y2);
-  ctx.strokeStyle = g; ctx.lineWidth = 1.5; ctx.stroke();
+  const g = ctx.createLinearGradient(x1,y1,x2,y2);
+  g.addColorStop(0,  `hsl(${h},100%,75%)`);
+  g.addColorStop(0.5,`hsl(${h2},100%,95%)`);
+  g.addColorStop(1,  `hsl(${h3},100%,75%)`);
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.quadraticCurveTo(cx,cy,x2,y2);
+  ctx.strokeStyle=g; ctx.lineWidth=1.5; ctx.stroke();
 }
 
 function drawDot(x, y, idx) {
-  const hue = (idx * 23 + t * 60) % 360;
-  const pulse = 0.85 + 0.15 * Math.sin(t * 3 + idx);
+  const hue=(idx*23+t*60)%360;
+  const pulse=0.85+0.15*Math.sin(t*3+idx);
 
-  // multi-layer glow rings
-  [40, 28, 18, 10].forEach((r, i) => {
-    const alpha = [0.04, 0.08, 0.14, 0.22][i];
-    ctx.beginPath(); ctx.arc(x, y, r * pulse, 0, Math.PI * 2);
-    ctx.fillStyle = `hsla(${hue},100%,70%,${alpha})`; ctx.fill();
+  [40,28,18,10].forEach((r,i) => {
+    const alpha=[0.04,0.08,0.14,0.22][i];
+    ctx.beginPath(); ctx.arc(x,y,r*pulse,0,Math.PI*2);
+    ctx.fillStyle=`hsla(${hue},100%,70%,${alpha})`; ctx.fill();
   });
 
-  // bright core
-  ctx.beginPath(); ctx.arc(x, y, 5 * pulse, 0, Math.PI * 2);
-  ctx.fillStyle = `hsl(${hue},100%,98%)`; ctx.fill();
+  ctx.beginPath(); ctx.arc(x,y,5*pulse,0,Math.PI*2);
+  ctx.fillStyle=`hsl(${hue},100%,98%)`; ctx.fill();
 
-  // inner glow ring
-  ctx.beginPath(); ctx.arc(x, y, 8 * pulse, 0, Math.PI * 2);
-  ctx.strokeStyle = `hsla(${hue},100%,85%,0.6)`;
-  ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.beginPath(); ctx.arc(x,y,8*pulse,0,Math.PI*2);
+  ctx.strokeStyle=`hsla(${hue},100%,85%,0.6)`;
+  ctx.lineWidth=1.5; ctx.stroke();
 
-  // spark rays
-  for (let a = 0; a < 6; a++) {
-    const ang = a * Math.PI / 3 + t * 1.5 + idx * 0.5;
-    const len = (8 + 4 * Math.sin(t * 3 + a)) * pulse;
-    const fade = 0.5 + 0.3 * Math.sin(t * 2 + a);
-    ctx.beginPath(); ctx.moveTo(x, y);
-    ctx.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len);
-    ctx.strokeStyle = `hsla(${(hue + a * 15) % 360},100%,90%,${fade})`;
-    ctx.lineWidth = 1; ctx.stroke();
+  for(let a=0;a<6;a++){
+    const ang=a*Math.PI/3+t*1.5+idx*0.5;
+    const len=(8+4*Math.sin(t*3+a))*pulse;
+    const fade=0.5+0.3*Math.sin(t*2+a);
+    ctx.beginPath(); ctx.moveTo(x,y);
+    ctx.lineTo(x+Math.cos(ang)*len,y+Math.sin(ang)*len);
+    ctx.strokeStyle=`hsla(${(hue+a*15)%360},100%,90%,${fade})`;
+    ctx.lineWidth=1; ctx.stroke();
+  }
+}
+
+function updateHUD(allExtended, numHands) {
+  frameCount++;
+  const n = allExtended.length;
+  const strings = n * (n-1) / 2;
+
+  hudHands.textContent   = numHands;
+  hudFingers.textContent = n;
+  hudStrings.textContent = strings;
+  hudNodes.textContent   = n;
+  hudFrame.textContent   = frameCount;
+
+  if (n > 0) {
+    const cx = allExtended.reduce((s,p)=>s+p.x,0)/n;
+    const cy = allExtended.reduce((s,p)=>s+p.y,0)/n;
+    hudX.textContent = Math.round(cx);
+    hudY.textContent = Math.round(cy);
+
+    if (prevCentroid) {
+      const vel = Math.hypot(cx-prevCentroid.x, cy-prevCentroid.y);
+      hudVel.textContent = Math.round(vel) + ' px/f';
+      hudVel.className = 'hud-value' + (vel > 8 ? ' active' : '');
+    }
+    prevCentroid = { x: cx, y: cy };
+
+    let maxD = 0;
+    for(let i=0;i<allExtended.length;i++)
+      for(let j=i+1;j<allExtended.length;j++)
+        maxD = Math.max(maxD, Math.hypot(allExtended[i].x-allExtended[j].x, allExtended[i].y-allExtended[j].y));
+    hudSpread.textContent = Math.round(maxD) + ' px';
+
+    hudStatus.textContent = strings > 0 ? 'ACTIVE' : 'TRACKING';
+    hudStatus.className = 'hud-value active';
+  } else {
+    hudX.textContent = '--'; hudY.textContent = '--';
+    hudVel.textContent = '--'; hudSpread.textContent = '--';
+    hudStatus.textContent = 'IDLE';
+    hudStatus.className = 'hud-value';
+    prevCentroid = null;
   }
 }
 
@@ -143,7 +352,9 @@ function onResults(results) {
   t += 0.016;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+  const numHands = results.multiHandLandmarks ? results.multiHandLandmarks.length : 0;
+
+  if (numHands > 0) {
     const allExtended = [];
     results.multiHandLandmarks.forEach((landmarks, handIdx) => {
       const tips = getExtendedTips(landmarks);
@@ -157,26 +368,27 @@ function onResults(results) {
       });
     });
 
-    for (let i = 0; i < allExtended.length; i++)
-      for (let j = i + 1; j < allExtended.length; j++) {
-        const key = `${allExtended[i].globalIdx}-${allExtended[j].globalIdx}`;
-        const baseHue = (allExtended[i].globalIdx * 17 + allExtended[j].globalIdx * 13) % 360;
-        drawBand(allExtended[i].x, allExtended[i].y, allExtended[j].x, allExtended[j].y, getOrCreate(key, baseHue));
+    for(let i=0;i<allExtended.length;i++)
+      for(let j=i+1;j<allExtended.length;j++){
+        const key=`${allExtended[i].globalIdx}-${allExtended[j].globalIdx}`;
+        const baseHue=(allExtended[i].globalIdx*17+allExtended[j].globalIdx*13)%360;
+        drawBand(allExtended[i].x,allExtended[i].y,allExtended[j].x,allExtended[j].y,getOrCreate(key,baseHue));
       }
 
     allExtended.forEach(p => drawDot(p.x, p.y, p.globalIdx));
-
+    updateHUD(allExtended, numHands);
   } else {
+    updateHUD([], 0);
     status.style.display = 'block';
     status.textContent = 'show your hands ✋';
   }
 }
 
 const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
-hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.6 });
+hands.setOptions({ maxNumHands:2, modelComplexity:1, minDetectionConfidence:0.7, minTrackingConfidence:0.6 });
 hands.onResults(onResults);
 
-navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 1280, height: 720 } })
+navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:1280, height:720 } })
   .then(stream => {
     video.srcObject = stream;
     video.onloadedmetadata = () => {
