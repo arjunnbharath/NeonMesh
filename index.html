@@ -28,7 +28,7 @@ canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
   <video id="video" autoplay playsinline muted></video>
   <canvas id="canvas"></canvas>
   <div id="status">loading hand tracking...</div>
-  <div id="hint">show both hands to the camera</div>
+  <div id="hint">point fingers to create strings</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
@@ -44,112 +44,151 @@ function resize() { canvas.width = window.innerWidth; canvas.height = window.inn
 resize();
 window.addEventListener('resize', resize);
 
-// 10 points per hand:
-// 0=wrist, 2=thumb mcp, 4=thumb tip, 5=index mcp, 8=index tip,
-// 9=middle mcp, 12=middle tip, 13=ring mcp, 16=ring tip, 20=pinky tip
-const LANDMARK_IDS = [0, 2, 4, 5, 8, 9, 12, 13, 16, 20];
+const FINGERS = [
+  { tip: 8,  pip: 6  },
+  { tip: 12, pip: 10 },
+  { tip: 16, pip: 14 },
+  { tip: 20, pip: 18 },
+];
+const THUMB = { tip: 4, mcp: 2 };
+
+function isFingerExtended(landmarks, finger) {
+  return landmarks[finger.tip].y < landmarks[finger.pip].y;
+}
+function isThumbExtended(landmarks) {
+  return Math.abs(landmarks[THUMB.tip].x - landmarks[9].x) >
+         Math.abs(landmarks[THUMB.mcp].x - landmarks[9].x);
+}
+function getExtendedTips(landmarks) {
+  const tips = [];
+  if (isThumbExtended(landmarks)) tips.push(THUMB.tip);
+  FINGERS.forEach(f => { if (isFingerExtended(landmarks, f)) tips.push(f.tip); });
+  return tips;
+}
 
 const stringState = {};
 function getOrCreate(key, h) {
   if (!stringState[key])
-    stringState[key] = {hue: h, hueSpeed: 0.35+Math.random()*0.75, vib: 0, prevDist: 0};
+    stringState[key] = { hue: h, hueSpeed: 2.5 + Math.random() * 3.5, vib: 0, prevDist: 0 };
   return stringState[key];
 }
 
 let t = 0;
 
-function drawBand(x1,y1,x2,y2,state) {
-  const dist = Math.hypot(x2-x1,y2-y1)||1;
+function drawBand(x1, y1, x2, y2, state) {
+  const dist = Math.hypot(x2 - x1, y2 - y1) || 1;
   const delta = dist - state.prevDist;
-  if(Math.abs(delta)>1.5) state.vib = Math.min(Math.abs(delta)*0.45,12);
+  if (Math.abs(delta) > 1.5) state.vib = Math.min(Math.abs(delta) * 0.45, 12);
   state.prevDist = dist;
   state.vib *= 0.84;
   state.hue = (state.hue + state.hueSpeed) % 360;
 
-  const h=state.hue, h2=(state.hue+60)%360, h3=(state.hue+120)%360;
-  const mx=(x1+x2)/2, my=(y1+y2)/2;
-  const nx=-(y2-y1)/dist, ny=(x2-x1)/dist;
-  const cx=mx+nx*state.vib*Math.sin(t*20);
-  const cy=my+ny*state.vib*Math.sin(t*20);
+  const h = state.hue, h2 = (state.hue + 60) % 360, h3 = (state.hue + 120) % 360;
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+  const nx = -(y2 - y1) / dist, ny = (x2 - x1) / dist;
+  const cx = mx + nx * state.vib * Math.sin(t * 20);
+  const cy = my + ny * state.vib * Math.sin(t * 20);
 
-  const g = ctx.createLinearGradient(x1,y1,x2,y2);
-  g.addColorStop(0,  `hsl(${h},100%,68%)`);
-  g.addColorStop(0.5,`hsl(${h2},100%,85%)`);
-  g.addColorStop(1,  `hsl(${h3},100%,68%)`);
+  // outer glow layers for the line
+  [18, 10, 5].forEach((lw, i) => {
+    const alpha = [0.04, 0.07, 0.12][i];
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.quadraticCurveTo(cx, cy, x2, y2);
+    ctx.strokeStyle = `hsla(${h2},100%,70%,${alpha})`;
+    ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.stroke();
+  });
 
-  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.quadraticCurveTo(cx,cy,x2,y2);
-  ctx.strokeStyle=`hsla(${h2},100%,70%,0.07)`; ctx.lineWidth=6; ctx.lineCap='round'; ctx.stroke();
-
-  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.quadraticCurveTo(cx,cy,x2,y2);
-  ctx.strokeStyle=g; ctx.lineWidth=0.8; ctx.stroke();
+  // core bright line with gradient
+  const g = ctx.createLinearGradient(x1, y1, x2, y2);
+  g.addColorStop(0,   `hsl(${h},100%,75%)`);
+  g.addColorStop(0.5, `hsl(${h2},100%,95%)`);
+  g.addColorStop(1,   `hsl(${h3},100%,75%)`);
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.quadraticCurveTo(cx, cy, x2, y2);
+  ctx.strokeStyle = g; ctx.lineWidth = 1.5; ctx.stroke();
 }
 
-function drawDot(x,y,idx) {
-  const hue=(idx*23+t*28)%360;
-  const pulse=0.85+0.15*Math.sin(t*3+idx);
-  ctx.beginPath(); ctx.arc(x,y,13*pulse,0,Math.PI*2);
-  ctx.fillStyle=`hsla(${hue},100%,65%,0.09)`; ctx.fill();
-  ctx.beginPath(); ctx.arc(x,y,4.5*pulse,0,Math.PI*2);
-  ctx.fillStyle=`hsla(${hue},100%,97%,1)`; ctx.fill();
-  for(let a=0;a<4;a++){
-    const ang=a*Math.PI/2+t+idx*0.5;
-    const len=(5.5+2*Math.sin(t*2+a))*pulse;
-    ctx.beginPath(); ctx.moveTo(x,y);
-    ctx.lineTo(x+Math.cos(ang)*len,y+Math.sin(ang)*len);
-    ctx.strokeStyle=`hsla(${hue},100%,90%,0.45)`; ctx.lineWidth=0.7; ctx.stroke();
+function drawDot(x, y, idx) {
+  const hue = (idx * 23 + t * 60) % 360;
+  const pulse = 0.85 + 0.15 * Math.sin(t * 3 + idx);
+
+  // multi-layer glow rings
+  [40, 28, 18, 10].forEach((r, i) => {
+    const alpha = [0.04, 0.08, 0.14, 0.22][i];
+    ctx.beginPath(); ctx.arc(x, y, r * pulse, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(${hue},100%,70%,${alpha})`; ctx.fill();
+  });
+
+  // bright core
+  ctx.beginPath(); ctx.arc(x, y, 5 * pulse, 0, Math.PI * 2);
+  ctx.fillStyle = `hsl(${hue},100%,98%)`; ctx.fill();
+
+  // inner glow ring
+  ctx.beginPath(); ctx.arc(x, y, 8 * pulse, 0, Math.PI * 2);
+  ctx.strokeStyle = `hsla(${hue},100%,85%,0.6)`;
+  ctx.lineWidth = 1.5; ctx.stroke();
+
+  // spark rays
+  for (let a = 0; a < 6; a++) {
+    const ang = a * Math.PI / 3 + t * 1.5 + idx * 0.5;
+    const len = (8 + 4 * Math.sin(t * 3 + a)) * pulse;
+    const fade = 0.5 + 0.3 * Math.sin(t * 2 + a);
+    ctx.beginPath(); ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len);
+    ctx.strokeStyle = `hsla(${(hue + a * 15) % 360},100%,90%,${fade})`;
+    ctx.lineWidth = 1; ctx.stroke();
   }
 }
 
 function onResults(results) {
   status.style.display = 'none';
   t += 0.016;
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-
-  const allPoints = [];
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    const allExtended = [];
     results.multiHandLandmarks.forEach((landmarks, handIdx) => {
-      LANDMARK_IDS.forEach((id, li) => {
-        const lm = landmarks[id];
-        allPoints.push({
-          x: (1-lm.x)*canvas.width,
-          y: lm.y*canvas.height,
-          globalIdx: handIdx*10+li
+      const tips = getExtendedTips(landmarks);
+      tips.forEach(tipId => {
+        const lm = landmarks[tipId];
+        allExtended.push({
+          x: (1 - lm.x) * canvas.width,
+          y: lm.y * canvas.height,
+          globalIdx: handIdx * 21 + tipId
         });
       });
     });
 
-    for(let i=0;i<allPoints.length;i++)
-      for(let j=i+1;j<allPoints.length;j++){
-        const key=`${allPoints[i].globalIdx}-${allPoints[j].globalIdx}`;
-        const baseHue=(allPoints[i].globalIdx*17+allPoints[j].globalIdx*13)%360;
-        drawBand(allPoints[i].x,allPoints[i].y,allPoints[j].x,allPoints[j].y,getOrCreate(key,baseHue));
+    for (let i = 0; i < allExtended.length; i++)
+      for (let j = i + 1; j < allExtended.length; j++) {
+        const key = `${allExtended[i].globalIdx}-${allExtended[j].globalIdx}`;
+        const baseHue = (allExtended[i].globalIdx * 17 + allExtended[j].globalIdx * 13) % 360;
+        drawBand(allExtended[i].x, allExtended[i].y, allExtended[j].x, allExtended[j].y, getOrCreate(key, baseHue));
       }
 
-    allPoints.forEach(p=>drawDot(p.x,p.y,p.globalIdx));
+    allExtended.forEach(p => drawDot(p.x, p.y, p.globalIdx));
+
   } else {
-    status.style.display='block';
-    status.textContent='show your hands ✋';
+    status.style.display = 'block';
+    status.textContent = 'show your hands ✋';
   }
 }
 
-const hands = new Hands({locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
-hands.setOptions({maxNumHands:2,modelComplexity:1,minDetectionConfidence:0.7,minTrackingConfidence:0.6});
+const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.6 });
 hands.onResults(onResults);
 
-navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:1280,height:720}})
+navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 1280, height: 720 } })
   .then(stream => {
     video.srcObject = stream;
     video.onloadedmetadata = () => {
       video.play();
       const camera = new Camera(video, {
-        onFrame: async () => { await hands.send({image:video}); },
-        width:1280, height:720
+        onFrame: async () => { await hands.send({ image: video }); },
+        width: 1280, height: 720
       });
       camera.start();
     };
   })
-  .catch(() => { status.textContent='camera access denied — please allow camera'; });
+  .catch(() => { status.textContent = 'camera access denied — please allow camera'; });
 </script>
 </body>
 </html>
